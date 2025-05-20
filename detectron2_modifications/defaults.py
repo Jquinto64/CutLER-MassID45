@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# Modified by XuDong Wang from https://github.com/facebookresearch/detectron2/blob/main/detectron2/engine/defaults.py
+# Copyright (c) Facebook, Inc. and its affiliates.
 
 """
 This file contains components with some default boilerplate logic user may need
@@ -22,13 +21,11 @@ from fvcore.nn.precise_bn import get_bn_modules
 from omegaconf import OmegaConf
 from torch.nn.parallel import DistributedDataParallel
 
-import data.transforms as T
+import detectron2.data.transforms as T
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.config import CfgNode, LazyConfig
 from detectron2.data import (
     MetadataCatalog,
-)
-from data import (
     build_detection_test_loader,
     build_detection_train_loader,
 )
@@ -38,8 +35,8 @@ from detectron2.evaluation import (
     print_csv_format,
     verify_results,
 )
-from modeling import build_model
-from solver import build_lr_scheduler, build_optimizer
+from detectron2.modeling import build_model
+from detectron2.solver import build_lr_scheduler, build_optimizer
 from detectron2.utils import comm
 from detectron2.utils.collect_env import collect_env_info
 from detectron2.utils.env import seed_all_rng
@@ -47,9 +44,8 @@ from detectron2.utils.events import CommonMetricPrinter, JSONWriter, Tensorboard
 from detectron2.utils.file_io import PathManager
 from detectron2.utils.logger import setup_logger
 
-from detectron2.engine import hooks
-from detectron2.engine import TrainerBase
-from .train_loop import CustomAMPTrainer, CustomSimpleTrainer
+from . import hooks
+from .train_loop import AMPTrainer, SimpleTrainer, TrainerBase
 from PIL import Image
 
 __all__ = [
@@ -124,13 +120,7 @@ Run on multiple machines:
     parser.add_argument(
         "--machine-rank", type=int, default=0, help="the rank of this machine (unique per machine)"
     )
-    parser.add_argument(
-        "--test-dataset", type=str, default="", help="the dataset used for evaluation"
-    )
-    parser.add_argument(
-        "--train-dataset", type=str, default="", help="the dataset used for training"
-    )
-    parser.add_argument("--no-segm", action="store_true", help="perform evaluation on detection only")
+
     # PyTorch still may leave orphan processes in multi-gpu training.
     # Therefore we use a deterministic way to obtain port,
     # so that users are aware of orphan processes by seeing the port occupied.
@@ -180,6 +170,30 @@ def _highlight(code, filename):
     lexer = Python3Lexer() if filename.endswith(".py") else YamlLexer()
     code = pygments.highlight(code, lexer, Terminal256Formatter(style="monokai"))
     return code
+
+
+# adapted from:
+# https://github.com/pytorch/tnt/blob/ebda066f8f55af6a906807d35bc829686618074d/torchtnt/utils/device.py#L328-L346
+def _set_float32_precision(precision: str = "high") -> None:
+    """Sets the precision of float32 matrix multiplications and convolution operations.
+
+    For more information, see the PyTorch docs:
+    - https://pytorch.org/docs/stable/generated/torch.set_float32_matmul_precision.html
+    - https://pytorch.org/docs/stable/backends.html#torch.backends.cudnn.allow_tf32
+
+    Args:
+        precision: The setting to determine which datatypes to use for matrix
+        multiplication and convolution operations.
+    """
+    if not (torch.cuda.is_available()):  # Not relevant for non-CUDA devices
+        return
+    # set precision for matrix multiplications
+    torch.set_float32_matmul_precision(precision)
+    # set precision for convolution operations
+    if precision == "highest":
+        torch.backends.cudnn.allow_tf32 = False
+    else:
+        torch.backends.cudnn.allow_tf32 = True
 
 
 def default_setup(cfg, args):
@@ -236,6 +250,14 @@ def default_setup(cfg, args):
         torch.backends.cudnn.benchmark = _try_get_key(
             cfg, "CUDNN_BENCHMARK", "train.cudnn_benchmark", default=False
         )
+
+    fp32_precision = _try_get_key(cfg, "FLOAT32_PRECISION", "train.float32_precision", default="")
+    if fp32_precision != "":
+        logger.info(f"Set fp32 precision to {fp32_precision}")
+        _set_float32_precision(fp32_precision)
+        logger.info(f"{torch.get_float32_matmul_precision()=}")
+        logger.info(f"{torch.backends.cuda.matmul.allow_tf32=}")
+        logger.info(f"{torch.backends.cudnn.allow_tf32=}")
 
 
 def default_writers(output_dir: str, max_iter: Optional[int] = None):
@@ -299,10 +321,10 @@ class DefaultPredictor:
         checkpointer.load(cfg.MODEL.WEIGHTS)
 
         self.aug = T.ResizeShortestEdge(
-            [cfg.INPUT.MIN_SIZE_TEST, cfg.INPUT.MIN_SIZE_TEST], 
-            cfg.INPUT.MAX_SIZE_TEST,
-            interp = Image.BILINEAR # Resize using default method only
+            [cfg.INPUT.MIN_SIZE_TEST, cfg.INPUT.MIN_SIZE_TEST], cfg.INPUT.MAX_SIZE_TEST, interp=Image.BILINEAR
         )
+        # # Optional resizing to square size via padding
+        # self.aug_optional = T.FixedSizeCrop(crop_size=(cfg.INPUT.MAX_SIZE_TEST, cfg.INPUT.MAX_SIZE_TEST))
 
         self.input_format = cfg.INPUT.FORMAT
         assert self.input_format in ["RGB", "BGR"], self.input_format
@@ -324,9 +346,13 @@ class DefaultPredictor:
                 original_image = original_image[:, :, ::-1]
             height, width = original_image.shape[:2]
             image = self.aug.get_transform(original_image).apply_image(original_image)
+            # # Optional resizing to square size via padding
+            # image = self.aug_optional.get_transform(image).apply_image(image)
             image = torch.as_tensor(image.astype("float32").transpose(2, 0, 1))
+            image.to(self.cfg.MODEL.DEVICE)
 
             inputs = {"image": image, "height": height, "width": width}
+
             predictions = self.model([inputs])[0]
             return predictions
 
@@ -391,10 +417,9 @@ class DefaultTrainer(TrainerBase):
         data_loader = self.build_train_loader(cfg)
 
         model = create_ddp_model(model, broadcast_buffers=False)
-        if cfg.SOLVER.AMP.ENABLED:
-            self._trainer = CustomAMPTrainer(model, data_loader, optimizer, cfg=cfg)
-        else:
-            self._trainer = CustomSimpleTrainer(model, data_loader, optimizer, cfg=cfg)
+        self._trainer = (AMPTrainer if cfg.SOLVER.AMP.ENABLED else SimpleTrainer)(
+            model, data_loader, optimizer
+        )
 
         self.scheduler = self.build_lr_scheduler(cfg, optimizer)
         self.checkpointer = DetectionCheckpointer(
@@ -444,16 +469,18 @@ class DefaultTrainer(TrainerBase):
         ret = [
             hooks.IterationTimer(),
             hooks.LRScheduler(),
-            hooks.PreciseBN(
-                # Run at the same freq as (but before) evaluation.
-                cfg.TEST.EVAL_PERIOD,
-                self.model,
-                # Build a new data loader to not affect training
-                self.build_train_loader(cfg),
-                cfg.TEST.PRECISE_BN.NUM_ITER,
-            )
-            if cfg.TEST.PRECISE_BN.ENABLED and get_bn_modules(self.model)
-            else None,
+            (
+                hooks.PreciseBN(
+                    # Run at the same freq as (but before) evaluation.
+                    cfg.TEST.EVAL_PERIOD,
+                    self.model,
+                    # Build a new data loader to not affect training
+                    self.build_train_loader(cfg),
+                    cfg.TEST.PRECISE_BN.NUM_ITER,
+                )
+                if cfg.TEST.PRECISE_BN.ENABLED and get_bn_modules(self.model)
+                else None
+            ),
         ]
 
         # Do PreciseBN before checkpointer, because it updates the model and need to

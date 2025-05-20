@@ -11,5 +11,5 @@ from .build import (
     print_instances_class_histogram,
     )
 from detectron2.data.common import *
-
+from .coco_instance_new_baseline_dataset_mapper import *
 __all__ = [k for k in globals().keys() if not k.startswith("_")]

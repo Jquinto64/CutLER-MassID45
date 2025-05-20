@@ -35,6 +35,20 @@ Unsupervised video instance segmentation (**VideoCutLER**) is also supported. **
 ## Installation
 See [installation instructions](INSTALL.md).
 
+## MassID45 Instructions
+1. Download the pretrained `CutLER` cascade Mask R-CNN checkpoint:
+
+```bash
+wget http://dl.fbaipublicfiles.com/cutler/checkpoints/cutler_cascade_final.pth
+```
+
+2. To run inference with CutLER, replace `--dataset_img_path` and `--dataset_json_path` in `sahi_inference_zero_shot.sh` with the locations of the validation or testing data, respectively, then run:
+
+```bash
+sbatch sahi_inference_zero_shot.sh
+```
+Results will appear in the `runs/predict/ `folder with the experiment name specified in the `--exp_name` argument.
+
 ## Dataset Preparation
 See [Preparing Datasets for CutLER](datasets/README.md).
 

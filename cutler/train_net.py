@@ -26,7 +26,7 @@ import detectron2.utils.comm as comm
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.config import get_cfg
 from config import add_cutler_config
-from detectron2.data import MetadataCatalog
+from detectron2.data import MetadataCatalog, build_detection_train_loader
 from engine import DefaultTrainer, default_argument_parser, default_setup
 from detectron2.engine import hooks, launch
 from detectron2.evaluation import (
@@ -40,9 +40,13 @@ from detectron2.evaluation import (
     SemSegEvaluator,
     verify_results,
 )
+from detectron2.data import transforms as T
 from evaluation import COCOEvaluator
 from detectron2.modeling import GeneralizedRCNNWithTTA
 import data # register new datasets
+from data.coco_instance_new_baseline_dataset_mapper import COCOInstanceNewBaselineDatasetMapper
+from data.dataset_mapper import DatasetMapper
+from PIL import Image
 import modeling.roi_heads
 
 def build_evaluator(cfg, dataset_name, output_folder=None):
@@ -112,12 +116,58 @@ class Trainer(DefaultTrainer):
         res = cls.test(cfg, model, evaluators)
         res = OrderedDict({k + "_TTA": v for k, v in res.items()})
         return res
+    
+    # @classmethod
+    # def build_train_loader(cls, cfg):
+    #     # coco instance segmentation lsj new baseline
+    #     # augs = [
+    #     #     T.RandomFlip(
+    #     #         horizontal=True,
+    #     #         vertical=False,
+    #     #     ),
+    #     #     T.RandomRotation(angle=[90, 180, -90, -180], sample_style = 'choice'),
+    #     #     T.ResizeShortestEdge(short_edge_length=(800, 800), max_size = cfg.INPUT.IMAGE_SIZE, sample_style = 'choice', interp=Image.LANCZOS),
+    #     #     T.FixedSizeCrop(crop_size=(cfg.INPUT.IMAGE_SIZE, cfg.INPUT.IMAGE_SIZE)),
+    #     # ]
+    #     # mapper = DatasetMapper(
+    #     #     cfg,
+    #     #     is_train=True,
+    #     #     augmentations=augs
+    #     # )
+    #     # return build_detection_train_loader(cfg, mapper=mapper)
+    #     mapper = COCOInstanceNewBaselineDatasetMapper(cfg, True)
+    #     return build_detection_train_loader(cfg, mapper=mapper)
+    
+from detectron2.data.datasets import register_coco_instances
 
+def register_custom_coco_dataset(args, dataset_path: str = "/scratch/ssd004/scratch/jquinto/CutLER/datasets/lifeplan/") -> None:
+   annotations_path = dataset_path + "annotations/"
+   register_coco_instances(
+       "lifeplan_train",
+       {},
+       annotations_path + "instances_train2017.json",
+       dataset_path + "train2017",
+   )
+   if args.eval_only:
+    register_coco_instances(
+        "lifeplan_valid",
+        {},
+        annotations_path + "instances_val2017.json",
+        dataset_path + "val2017", ## NOTE: we generally do not want to test on the tiled test set
+    )
+   else: 
+    register_coco_instances(
+        "lifeplan_valid",
+        {},
+        annotations_path + "instances_val2017.json",
+        dataset_path + "val2017",
+    )
 
 def setup(args):
     """
     Create configs and perform basic setups.
     """
+    register_custom_coco_dataset(args)
     cfg = get_cfg()
     add_cutler_config(cfg)
     cfg.merge_from_file(args.config_file)

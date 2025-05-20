@@ -138,3 +138,7 @@ venv.bak/
 
 # mkdocs documentation
 /site
+/archived
+/runs
+/slogs
+/datasets

@@ -28,6 +28,19 @@ cd ..
 git clone --recursive git@github.com:facebookresearch/CutLER.git
 cd CutLER
 pip install -r requirements.txt
+pip install sahi==0.11.18 pycocotools
+
+# Move the following files to the location of your conda environments (.e.g, miniconda/envs/cutler/lib/python3.8/site-packages/detectron2/)
+cp detectron2_modifications/defaults.py /miniconda/envs/cutler/lib/python3.8/site-packages/detectron2/engine/defaults.py
+
+cp detectron2_modifications/augmentation_impl.py /miniconda/envs/cutler/lib/python3.8/site-packages/detectron2/data/transforms/augmentation_impl.py
+
+
+# Move the following files to miniconda/envs/cutler/lib/python3.8/site-packages/sahi/:
+# Change lines 16-17 in sahi_modifications/detectron2.py to: sys.path.insert(0, "<absolute path to CutLER>"); sys.path.insert(0, "<absolute path to CutLER/cutler>")
+cp sahi_modifications/detectron2.py /miniconda/envs/cutler/lib/python3.8/site-packages/sahi/models/detectron2.py
+
+cp sahi_modifications/annotation.py /miniconda/envs/cutler/lib/python3.8/site-packages/sahi/annotation.py
 ```
 
 ## datasets

@@ -16,26 +16,32 @@ MODEL:
     CLS_AGNOSTIC_BBOX_REG: True
   ROI_HEADS:
     NAME: CustomCascadeROIHeads
+    NUM_CLASSES: 1
   RPN:
     POST_NMS_TOPK_TRAIN: 2000
 DATASETS:
-  TRAIN: ("coco_2017_train",)
-  TEST: ("coco_2017_val",)
+  TRAIN: ("lifeplan_train",)
+  TEST: ("lifeplan_valid",)
 SOLVER:
+  AMP:
+      ENABLED: True
   IMS_PER_BATCH: 8
-  BASE_LR: 0.02
+  BASE_LR: 5e-5
   STEPS: (60000, 80000)
-  MAX_ITER: 90000
-  CHECKPOINT_PERIOD: 1000
+  MAX_ITER: 15000
+  CHECKPOINT_PERIOD: 4885
   BASE_LR_MULTIPLIER: 2
   BASE_LR_MULTIPLIER_NAMES: ['roi_heads.mask_head.predictor', 'roi_heads.box_predictor.0.cls_score', 'roi_heads.box_predictor.0.bbox_pred', 'roi_heads.box_predictor.1.cls_score', 'roi_heads.box_predictor.1.bbox_pred', 'roi_heads.box_predictor.2.cls_score', 'roi_heads.box_predictor.2.bbox_pred']
 INPUT:
-  MIN_SIZE_TRAIN: (640, 672, 704, 736, 768, 800)
-  MAX_SIZE_TRAIN: 1333
-  MASK_FORMAT: "bitmask"
+  MIN_SIZE_TRAIN: (1024, 1024)
+  MAX_SIZE_TRAIN: 1024
+  IMAGE_SIZE: 1024
+  MASK_FORMAT: "polygon"
   FORMAT: "RGB"
 TEST:
   PRECISE_BN:
     ENABLED: True
-  EVAL_PERIOD: 1000
+  EVAL_PERIOD: 4885
+DATALOADER:
+  NUM_WORKERS: 4
 OUTPUT_DIR: "output/100perc"
